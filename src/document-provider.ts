@@ -166,20 +166,29 @@ export default class LatexDocumentProvider implements vscode.TextDocumentContent
     this.output.clear();
     this.output.appendLine(command);
     return this.compile(command, path, dir, true).catch(rejected => {
-      if (rejected.indexOf("There were undefined citations") < 0) {
-        // There was an error, instead of undefined citations
-        return rejected;
+      // There was an error, instead of undefined citations or references
+      if (rejected[1] == "neither") {
+        return rejected[0];
       }
 
-      // BibTeX command to be executed in output directory
-      let bibCommand = vscode.workspace.getConfiguration().get(constants.BIBTEX_COMMAND, "bibtex")
-                            + ` ${jobname}`;
+      // Dealing with just fixing references
+      if (rejected[1] == "reference" && rejected[1] != "both") {
+        this.output.appendLine(command);
+        return this.compile(command, path, dir, false);
+      }
+
+      // There were undefined citations or both undefined citations and references
 
       // Determine whether to use copy or cp
       let copyCommand = "copy";
       if (process.platform == "darwin" || process.platform == "linux") {
         copyCommand = "cp";
       }
+
+      // BibTeX command to be executed in output directory
+      let bibCommand = vscode.workspace.getConfiguration().get(constants.BIBTEX_COMMAND, "bibtex")
+                            + ` ${jobname}`;
+
 
       // Command sequence to fix undefined citations:
       //    1. copy bib files to the output directory
@@ -194,8 +203,8 @@ export default class LatexDocumentProvider implements vscode.TextDocumentContent
         command,
         command
       ].join(' && ');
-      this.output.appendLine(bibSequence);
 
+      this.output.appendLine(bibSequence);
       return this.compile(bibSequence, path, dir, false);
     });
   }
@@ -206,6 +215,8 @@ export default class LatexDocumentProvider implements vscode.TextDocumentContent
         this.diagnostics.clear();
         this.output.append(stdout);
         this.output.append(stderr);
+        let udRefs = stdout.indexOf("There were undefined references") >= 0,
+            udCites = stdout.indexOf("There were undefined citations") >= 0;
 
         if (err) {
           let regexp = new RegExp(constants.ERROR_REGEX, "gm");
@@ -223,12 +234,12 @@ export default class LatexDocumentProvider implements vscode.TextDocumentContent
           }
 
           this.diagnostics.set(entries);
-          reject(err);
+          reject([err, "neither"]);
           
           // firstInvk prevents an infinite loop in case the BibTeX command sequence can't fix
           // undefined citations
-        } else if (firstInvk && stdout.indexOf("There were undefined citations") >= 0) {
-          reject(stdout);
+        } else if (firstInvk && (udCites || udRefs)) {
+          reject([stdout, udCites ? (udRefs ? "both" : "citation") : "reference"]);
         } else {
           resolve(`${dir}/preview.pdf`);
         }
